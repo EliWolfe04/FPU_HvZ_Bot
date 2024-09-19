@@ -14,3 +14,10 @@ A few things you have to set in bot.py for the bot to run:
  - The guild ID
 
 All of these can be found in discord by right clicking the respective object and clicking "Copy ID"
+
+Some python libraries you will need:
+ - Pycord (https://docs.pycord.dev/en/stable/installing.html)
+ - Numpy (https://numpy.org/install/)
+ - CSV (Comes with Python)
+ - Pandas (https://pandas.pydata.org/)
+ - Pillow (https://python-pillow.org/)
