@@ -7,27 +7,33 @@ from dataclasses import dataclass, asdict
 import base64
 from io import BytesIO
 import requests # type: ignore
+import os
+import math
+import json
 
 bot = discord.Bot(intents=discord.Intents.all())
 
 registering = [] # list of players registering
 manual_register = [] # list of players that are being manually registered
 registered = [] # list of players registered, this does mean that the bot probably shouldn't go offline, maybe I'll fix that?
+badges = []
 
 file_path = '' # String of the file path to the folder
 
 # If you're using a website, set use_website = True then set the path variables to wherever you want to send player data to your API
-# If you're using a web API, I would suggest either using the same data that is sent by the bot, or modifying the data sent by the bot to the API
-# The data that is sent by the bot to the web API is what the FPU HvZ website uses
 use_website = False
-backend_path = '' # Link to website api main path
-mod_path = '' # Extension for API to mod a player
-infection_path = '' # Extension for API to infect a player
-oz_path = '' # Extension for API to OZ a player
-cure_path = '' # Extension for API to cure a player
-player_creation_path = '' # Extension for API to create a player
-player_removal_path = '' # Extension for API to remove a player
-wipe_path = '' # Extension for API to clear the database
+backend_path = ''
+mod_path = ''
+infection_path = ''
+oz_path = ''
+cure_path = ''
+player_creation_path = ''
+player_removal_path = ''
+wipe_path = ''
+give_badge_path = ''
+create_badge_path = ''
+remove_badge_path = ''
+list_badge_path = ''
 
 bot_id = '' # The bot ID to run the bot
 registation_channel = 0 # Registration channel ID
@@ -145,7 +151,7 @@ async def on_message(message):
                                 continue
                             while(hvz_id == type(int(row[0]))):
                                 hvz_id = np.random.randint(100000,999999)
-                    player = Player(message.author.id, hvz_id, message.content)
+                    player = Player(message.author.id, hvz_id, message.content.replace(",","").replace("\"",""))
                     registering.append(player)
                     await message.author.send('What is your first and last name? (Ex: John Smith)')
             # name question
@@ -229,6 +235,39 @@ async def on_message(message):
                 hum += 1
                 await updatePresence()
                 await message.author.send(file=discord.File(f'{file_path}/player_ids/{hvz_member_id}_id.png'))
+            if(step == 'BadgeName: Funny description'):
+                badges.append(msgs[0].content)
+                await message.author.send('Please upload an image to use for the badge (it will be reformatted to 200x200)')
+            if(step == 'Please upload an image to use for the badge (it will be reformatted to 200x200)'):
+                if(message.attachments == []):
+                    # makes sure there is an attachment
+                    await message.author.send('You did not send an image, please run the command again in the server to continue registration')
+                    return
+                if(not message.attachments[0].content_type.startswith('image')):
+                    # makes sure there is an image attachment, works with pngs and jpgs (as far as I know and tested)
+                    await message.author.send('You did not send an image, please run the command again in the server to continue registration')
+                    return
+                try:
+                    badge = badges.pop()
+                    badge_name = badge.split(": ")[0]
+                    badge_description = badge.split(": ")[1]
+                    await message.attachments[0].save(f'{file_path}/created_badges/{badge_name}.png')
+                    img = Image.open(f'{file_path}/created_badges/{badge_name}.png').resize((200,200))
+                    im_file = BytesIO()
+                    img.save(im_file, format="PNG")
+                    im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
+                    im_b64 = base64.b64encode(im_bytes).decode('utf-8')
+                    post_data = {
+                        "name": badge_name,
+                        "description": badge_description,
+                        "image": f'data:image/png;base64,{im_b64}'
+                    }
+                    if(use_website):
+                        post_request = requests.post(f'{backend_path}{create_badge_path}', json=post_data) # Infection packet to the website
+                        print(post_request.status_code)
+                except:
+                    await message.author.send('Error in the badge creating process, please start over')
+
 
     if(channel.id == registation_channel): # If a person just types nonsense in the registration channel
         try: # have to use a try except because it'll get deleted by the bot before if the user runs a command
@@ -275,6 +314,21 @@ async def manualregister(ctx, player: discord.SlashCommandOptionType.user, name:
 
 @bot.command(description="Register as a mod", guild_ids=[hvz_guild_id])
 async def modregister(ctx):
+    with open(file=f'{file_path}/player_data.csv', mode='r') as f:
+        csv_reader = csv.reader(f)
+        for row in csv_reader:
+            if(row[1] == str(ctx.author.id)):
+                post_data = {
+                    "player_id": int(row[0])
+                }
+                if(use_website):
+                    post_request = requests.post(f'{backend_path}{mod_path}', json=post_data) # Just sends a mod player packet to the website
+                    print(post_data)
+                    print(post_request.status_code)
+                global hum
+                hum -= 1 # Removes the amount of humans left since the moderator was considered human before
+                await updatePresence()
+                await ctx.respond(f'Successfully modded {row[3]} on the website!', ephemeral=True)
     await ctx.author.send('What is your first and last name? (Ex: Eli Wolfe)') # Starts the registration process in the DMs
     await ctx.respond('Check the DM message from the bot for instructions to register', ephemeral=True)
 
@@ -308,7 +362,7 @@ async def whois(ctx, player: discord.SlashCommandOptionType.user):
                 embed = discord.Embed(title="WhoIs Result")
                 embed.add_field(name="Player Name", value=f'{row[3]}')
                 embed.set_image(url=f'attachment://{player.id}.png')
-                if(type(bool(row[4])) == False):
+                if(row[4] == 'False'):
                     embed.add_field(name="Faction", value="Human")
                 else:
                     embed.add_field(name="Faction", value="Zombie")
@@ -325,33 +379,17 @@ async def modwhois(ctx, player: discord.SlashCommandOptionType.user):
     except:
         await ctx.respond('They are not a registered player, sorry!', ephemeral=True)
 
-@bot.command(description="Mod a user", guild_ids=[hvz_guild_id])
-async def mod(ctx, id: int):
-    with open(file=f'{file_path}/player_data.csv', mode='r') as f:
-        csv_reader = csv.reader(f)
-        for row in csv_reader:
-            if(row[0] == str(id)):
-                post_data = {
-                    "player_id": int(id)
-                }
-                if(use_website):
-                    post_request = requests.post(f'{backend_path}{mod_path}', json=post_data) # Just sends a mod player packet to the website
-                    print(post_data)
-                    print(post_request.status_code)
-                global hum
-                hum -= 1 # Removes the amount of humans left since the moderator was considered human before
-                await updatePresence()
-                await ctx.respond(f'Successfully modded {row[3]} on the website!', ephemeral=True)
-
 @bot.command(description="Tag a player", guild_ids=[hvz_guild_id])
 async def tag(ctx, id: int):
     index = 0
+    z_id = 0
+    z_name = ''
     with open(file=f'{file_path}/player_data.csv', mode='r') as file:
         csv_reader = csv.reader(file)
-        z_id = 0
         for ro in csv_reader:
             if(ro[1] == str(ctx.author.id)):
                 z_id = ro[0] # Finds the ID of the player running this command
+                z_name = ro[3]
                 break
 
     with open(file=f'{file_path}/player_data.csv', mode="r") as f:
@@ -372,7 +410,7 @@ async def tag(ctx, id: int):
                 await updatePresence() # Updates the bot's player count
                 await hvz_member.add_roles(hvz_guild.get_role(zombie_role_id)) # Adds the respective roles
                 await hvz_member.remove_roles(hvz_guild.get_role(human_role_id))
-                await hvz_guild.get_channel(tags_channel).send(f'{hvz_member.name} was tagged by {ctx.author.name}, {hum} humans left!') # Sends a message in the tags channel
+                await hvz_guild.get_channel(tags_channel).send(f'{row[3]} was tagged by {z_name}, {hum} humans left!') # Sends a message in the tags channel
                 df.to_csv(f'{file_path}/player_data.csv', index=False, float_format='%g') # CSV gets updated
                 post_data = {
                     "human_id": int(id),
@@ -423,7 +461,7 @@ async def oz(ctx, id: int):
             index += 1
         await ctx.respond(f'{id} is not a valid ID!', ephemeral=True)
 
-@bot.command(description="Wipe the website database (Please only do this if you are super duper sure)", guild_ids=[hvz_guild_id])
+@bot.command(description="Wipe the website database (Please only do this if you are super sure)", guild_ids=[hvz_guild_id])
 async def wipewebsite(ctx, password:str):
 
     post_data = {
@@ -476,15 +514,27 @@ async def cure(ctx, id: int):
 
 @bot.command(description="Purge a channel of text messages", guild_ids=[hvz_guild_id])
 async def purgechannel(ctx):
-    # Will try to remove all of the text messsages from a discord channel, it can time out if there are too many messages
+    await ctx.response.defer(ephemeral=True)
     messages = ctx.channel.history()
     async for msg in messages:
         await msg.delete()
-    await ctx.respond('Channel cleared!', ephemeral=True)
+    await ctx.followup.send('Channel cleared!', ephemeral=True)
+
+@bot.command(description="Purge all players with a given role", guild_ids=[hvz_guild_id])
+async def purgerole(ctx, role_id):
+    members_to_kick = []
+    for pl in ctx.guild.members:
+        for role in pl.roles:
+            if(role.id == role_id):
+                members_to_kick.append(pl)
+                break
+    
+    for member in members_to_kick:
+        await ctx.reply(f'{member.name} has been purged!')
+        member.kick()
 
 @bot.command(description="Remove a player from the game", guild_ids=[hvz_guild_id])
 async def removeplayer(ctx, id: int):
-    # Removes a player from the game count to keep an accurate count of players for each team.
     index = 0
     with open(file=f'{file_path}/player_data.csv', mode='r') as f:
         csv_reader = csv.reader(f)
@@ -517,6 +567,89 @@ async def removeplayer(ctx, id: int):
             print(post_data)
             print(post_request.status_code)
         await ctx.respond(f'{df.at[index-1, "Name"]} has been removed from play!', ephemeral=True)
+
+@bot.command(description="Generate the sheets of player IDs to hand out", guild_ids=[hvz_guild_id])
+async def generateplayeridsheets(ctx):
+    await ctx.response.defer(ephemeral=True)
+    ids = 0
+    sheets = 0
+
+    for f in os.scandir(f'{file_path}/player_ids/sheets'):
+        if f.is_file() and f.path.endswith(".png"):
+            os.remove(f)
+
+    for f in os.scandir(f'{file_path}/player_ids'):
+        if f.is_file() and f.path.endswith(".png"):
+            discord_id = int(f.name.removesuffix("_id.png"))
+            hvz_guild = bot.get_guild(hvz_guild_id)
+            if hvz_guild.get_member(discord_id).roles.count(hvz_guild.get_role(mod_role_id)):
+                continue
+            if sheets == 0:
+                sheets += 1
+                new_sheet = Image.new(mode = "RGB", size=(1530, 1980), color=(255,255,255))
+                id_picture = Image.open(f.path)
+                new_sheet.paste(id_picture, (0,0))
+                ids += 1
+                new_sheet.save(f'{file_path}/player_ids/sheets/sheet_1.png')
+            else:
+                if(ids == 10):
+                    ids = 0
+                    sheets += 1
+                    new_sheet = Image.new(mode = "RGB", size=(1530, 1980), color=(255,255,255))
+                    new_sheet.save(f'{file_path}/player_ids/sheets/sheet_{sheets}.png')
+                sheet = Image.open(f'{file_path}/player_ids/sheets/sheet_{sheets}.png')
+                id_picture = Image.open(f.path)
+                x_pos = (ids%2)*945
+                y_pos = math.floor(ids/2)*396
+                sheet.paste(id_picture, (x_pos, y_pos))
+                ids += 1
+                sheet.save(f'{file_path}/player_ids/sheets/sheet_{sheets}.png')
+    sheet_files = []
+    for sheet_file in os.scandir(f'{file_path}/player_ids/sheets'):
+        if sheet_file.is_file() and sheet_file.path.endswith(".png"):
+            sheet_files.append(discord.File(sheet_file))
+    await ctx.followup.send(f'Drew {sheets} sheet(s)', ephemeral=True, files=sheet_files)
+
+@bot.command(description="Gives a badge to a player", guild_ids=[hvz_guild_id])
+async def giveplayerbadge(ctx, id: int, badgename: str):
+    post_data = {
+        "player_id": int(id),
+        "badge_name": str(badgename)
+    }
+    if(use_website):
+        post_request = requests.post(f'{backend_path}{give_badge_path}', json=post_data)
+        print(post_data)
+        print(post_request.status_code)
+    await ctx.respond(f'{id} was given the {badgename} badge!', ephemeral=True)
+
+@bot.command(description="Remove a badge from a player", guild_ids=[hvz_guild_id])
+async def removeplayerbadge(ctx, id: int, badgename: str):
+    post_data = {
+        "player_id": int(id),
+        "badge_name": str(badgename)
+    }
+    if(use_website):
+        post_request = requests.post(f'{backend_path}{remove_badge_path}', json=post_data)
+        print(post_data)
+        print(post_request)
+    await ctx.respond(f'{badgename} was removed from {id}', ephemeral=True)
+
+@bot.command(description="Create a badge", guild_ids=[hvz_guild_id])
+async def createbadge(ctx):
+    await ctx.author.send('What is the name and description of the badge? It needs to be formatted as:')
+    await ctx.author.send('BadgeName: Funny description')
+    await ctx.respond('Please continue with the badge creating process in the DM messages with the bot!', ephemeral=True)
+
+@bot.command(description="List the badges available to give to players", guild_ids=[hvz_guild_id])
+async def listbadges(ctx):
+    if(use_website):
+        get_request = requests.get(f'{backend_path}{list_badge_path}')
+        json_data = get_request.text
+        json_list = json.loads(json_data)
+        badges_string = ''
+        for data in json_list.get("data"):
+            badges_string += f'Name: {data.get("name")}, Description: {data.get("description")}\n'
+        await ctx.respond(badges_string, ephemeral=True)
 
 @dataclass
 class player:
