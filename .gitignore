@@ -1,0 +1,4 @@
+/venv
+*./player_ids
+*.env
+__pycache__

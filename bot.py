@@ -10,46 +10,61 @@ import requests # type: ignore
 import os
 import math
 import json
+import asyncio
+from pathlib import Path
+from dotenv import load_dotenv # type: ignore
+
+load_dotenv()
+
+def _env_int(name):
+    return int(os.getenv(name, 0) or 0)
+
+def _env_bool(name):
+    return os.getenv(name, 'False').strip().lower() in ('true', '1', 'yes')
 
 bot = discord.Bot(intents=discord.Intents.all())
+
+BASE_DIR = Path(__file__).resolve().parent # everything (player_data.csv, player_ids/, player_pictures/, etc.) lives next to this script
 
 registering = [] # list of players registering
 manual_register = [] # list of players that are being manually registered
 registered = [] # list of players registered, this does mean that the bot probably shouldn't go offline, maybe I'll fix that?
 badges = []
 
-file_path = '' # String of the file path to the folder
+file_path = str(BASE_DIR) # Folder holding player_data.csv etc, relative to this script (override via HVZ_DATA_DIR)
 
 # If you're using a website, set use_website = True then set the path variables to wherever you want to send player data to your API
-use_website = False
-backend_path = ''
-mod_path = ''
-infection_path = ''
-oz_path = ''
-cure_path = ''
-player_creation_path = ''
-player_removal_path = ''
-wipe_path = ''
-give_badge_path = ''
-create_badge_path = ''
-remove_badge_path = ''
-list_badge_path = ''
+use_website = _env_bool('use_website')
+backend_path = os.getenv('backend_path', '')
+mod_path = os.getenv('mod_path', '')
+infection_path = os.getenv('infection_path', '')
+oz_path = os.getenv('oz_path', '')
+cure_path = os.getenv('cure_path', '')
+player_creation_path = os.getenv('player_creation_path', '')
+player_removal_path = os.getenv('player_removal_path', '')
+wipe_path = os.getenv('wipe_path', '')
+give_badge_path = os.getenv('give_badge_path', '')
+create_badge_path = os.getenv('create_badge_path', '')
+remove_badge_path = os.getenv('remove_badge_path', '')
+list_badge_path = os.getenv('list_badge_path', '')
 
-bot_id = '' # The bot ID to run the bot
-registation_channel = 0 # Registration channel ID
-mod_channel = 0 # Mod bot channel ID
-tagging_channel = 0 # Tagging channel ID
-tags_channel = 0 # Tags channel ID
-human_role_id = 0 # Human role ID
-zombie_role_id = 0 # Zombie role ID
-player_role_id = 0 # Player role ID
-oz_role_id = 0 # OZ role ID
-cured_role_id = 0 # Cured role ID
-hvz_guild_id = 0 # Guild ID
-mod_role_id = 0 # Mod role ID
+bot_id = os.getenv('bot_id', '') # The bot ID to run the bot
+registation_channel = _env_int('registation_channel') # Registration channel ID
+mod_channel = _env_int('mod_channel') # Mod bot channel ID
+tagging_channel = _env_int('tagging_channel') # Tagging channel ID
+tags_channel = _env_int('tags_channel') # Tags channel ID
+human_role_id = _env_int('human_role_id') # Human role ID
+zombie_role_id = _env_int('zombie_role_id') # Zombie role ID
+player_role_id = _env_int('player_role_id') # Player role ID
+oz_role_id = _env_int('oz_role_id') # OZ role ID
+cured_role_id = _env_int('cured_role_id') # Cured role ID
+hvz_guild_id = _env_int('hvz_guild_id') # Guild ID
+mod_role_id = _env_int('mod_role_id') # Mod role ID
 
 hum = 0 # Human player count
 zom = 0 # Zombie player count
+
+csv_lock = asyncio.Lock() # serializes every player_data.csv read-modify-write so concurrent commands can't overwrite each other's changes
 
 @bot.event
 async def on_ready():
@@ -149,7 +164,7 @@ async def on_message(message):
                                 continue
                             if(row == []): # Don't read a blank line
                                 continue
-                            while(hvz_id == type(int(row[0]))):
+                            while(hvz_id == int(row[0])):
                                 hvz_id = np.random.randint(100000,999999)
                     player = Player(message.author.id, hvz_id, message.content.replace(",","").replace("\"",""))
                     registering.append(player)
@@ -304,7 +319,7 @@ async def manualregister(ctx, player: discord.SlashCommandOptionType.user, name:
                 continue
             if(row == []): # Don't read a blank line
                 continue
-            while(hvz_id == type(int(row[0]))):
+            while(hvz_id == int(row[0])):
                 hvz_id = np.random.randint(100000,999999)
     pl = Player(player.id, hvz_id, email)
     pl.setname(name)
@@ -381,85 +396,83 @@ async def modwhois(ctx, player: discord.SlashCommandOptionType.user):
 
 @bot.command(description="Tag a player", guild_ids=[hvz_guild_id])
 async def tag(ctx, id: int):
-    index = 0
-    z_id = 0
-    z_name = ''
-    with open(file=f'{file_path}/player_data.csv', mode='r') as file:
-        csv_reader = csv.reader(file)
-        for ro in csv_reader:
-            if(ro[1] == str(ctx.author.id)):
-                z_id = ro[0] # Finds the ID of the player running this command
-                z_name = ro[3]
-                break
+    async with csv_lock:
+        df = pd.read_csv(f'{file_path}/player_data.csv')
 
-    with open(file=f'{file_path}/player_data.csv', mode="r") as f:
-        csv_reader = csv.reader(f)
-        for row in csv_reader:
-            if(row[0] == str(id)):
-                df = pd.read_csv(f'{file_path}/player_data.csv')
-                if(df.at[index-1, 'Zombie'] == True): # Checks to see if the person they are tagging is already a zombie
-                    await ctx.respond(f'{row[3]} is already a zombie!', ephemeral=True)
-                    return
-                df.at[index-1, 'Zombie'] = True # Sets the person to a zombie in the db
-                hvz_guild = ctx.author.guild
-                hvz_member = await hvz_guild.fetch_member(row[1])
-                global zom
-                global hum
-                zom += 1
-                hum -= 1
-                await updatePresence() # Updates the bot's player count
-                await hvz_member.add_roles(hvz_guild.get_role(zombie_role_id)) # Adds the respective roles
-                await hvz_member.remove_roles(hvz_guild.get_role(human_role_id))
-                await hvz_guild.get_channel(tags_channel).send(f'{row[3]} was tagged by {z_name}, {hum} humans left!') # Sends a message in the tags channel
-                df.to_csv(f'{file_path}/player_data.csv', index=False, float_format='%g') # CSV gets updated
-                post_data = {
-                    "human_id": int(id),
-                    "zombie_id": int(z_id)
-                }
-                if(use_website):
-                    post_request = requests.post(f'{backend_path}{infection_path}', json=post_data) # Infection packet to the website
-                    print(post_data)
-                    print(post_request.status_code)
-                await ctx.respond(f'Successfully tagged {hvz_member.name}')
-                return
-            index += 1
-        await ctx.respond(f'{id} is not a valid ID!', ephemeral=True)
+        zombie_match = df.index[df['Discord_ID'] == ctx.author.id]
+        z_id = df.at[zombie_match[0], 'HvZ_ID'] if len(zombie_match) else 0 # Finds the ID of the player running this command
+        z_name = df.at[zombie_match[0], 'Name'] if len(zombie_match) else ''
+
+        target_match = df.index[df['HvZ_ID'] == id]
+        if not len(target_match):
+            await ctx.respond(f'{id} is not a valid ID!', ephemeral=True)
+            return
+        idx = target_match[0]
+        row = df.loc[idx]
+
+        if(df.at[idx, 'Zombie'] == True): # Checks to see if the person they are tagging is already a zombie
+            await ctx.respond(f'{row["Name"]} is already a zombie!', ephemeral=True)
+            return
+        df.at[idx, 'Zombie'] = True # Sets the person to a zombie in the db
+        global zom
+        global hum
+        zom += 1
+        hum -= 1
+        df.to_csv(f'{file_path}/player_data.csv', index=False, float_format='%g') # CSV gets updated first so it's never left stale by a later failure
+
+    await updatePresence() # Updates the bot's player count
+    hvz_guild = ctx.author.guild
+    hvz_member = await hvz_guild.fetch_member(row['Discord_ID'])
+    await hvz_member.add_roles(hvz_guild.get_role(zombie_role_id)) # Adds the respective roles
+    await hvz_member.remove_roles(hvz_guild.get_role(human_role_id))
+    await hvz_guild.get_channel(tags_channel).send(f'{row["Name"]} was tagged by {z_name}, {hum} humans left!') # Sends a message in the tags channel
+    post_data = {
+        "human_id": int(id),
+        "zombie_id": int(z_id)
+    }
+    if(use_website):
+        post_request = requests.post(f'{backend_path}{infection_path}', json=post_data) # Infection packet to the website
+        print(post_data)
+        print(post_request.status_code)
+    await ctx.respond(f'Successfully tagged {hvz_member.name}')
 
 @bot.command(description="OZ a player", guild_ids=[hvz_guild_id])
 async def oz(ctx, id: int):
-    index = 0
-    with open(file=f'{file_path}/player_data.csv', mode="r") as f:
-        csv_reader = csv.reader(f)
-        for row in csv_reader:
-            if(row[0] == str(id)):
-                df = pd.read_csv(f'{file_path}/player_data.csv')
-                if(df.at[index-1, 'Zombie'] == True):
-                    await ctx.respond(f'{row[3]} is already a zombie!', ephemeral=True)
-                    return
-                df.at[index-1, 'Zombie'] = True
-                hvz_guild = ctx.author.guild
-                hvz_member = await hvz_guild.fetch_member(row[1])
-                global zom
-                global hum
-                zom += 1
-                hum -= 1
-                await updatePresence()
-                await hvz_member.add_roles(hvz_guild.get_role(zombie_role_id))
-                await hvz_member.remove_roles(hvz_guild.get_role(human_role_id))
-                await hvz_member.add_roles(hvz_guild.get_role(oz_role_id))
-                await hvz_guild.get_channel(tags_channel).send(f'{row[3]} is now an OZ, {hum} humans left!')
-                df.to_csv(f'{file_path}/player_data.csv', index=False, float_format='%g')
-                post_data = {
-                    "player_id": int(id)
-                }
-                if(use_website):
-                    post_request = requests.post(f'{backend_path}{oz_path}', json=post_data)
-                    print(post_data)
-                    print(post_request.status_code)
-                await ctx.respond(f'Successfully tagged {hvz_member.name}', ephemeral=True)
-                return
-            index += 1
-        await ctx.respond(f'{id} is not a valid ID!', ephemeral=True)
+    async with csv_lock:
+        df = pd.read_csv(f'{file_path}/player_data.csv')
+
+        target_match = df.index[df['HvZ_ID'] == id]
+        if not len(target_match):
+            await ctx.respond(f'{id} is not a valid ID!', ephemeral=True)
+            return
+        idx = target_match[0]
+        row = df.loc[idx]
+
+        if(df.at[idx, 'Zombie'] == True):
+            await ctx.respond(f'{row["Name"]} is already a zombie!', ephemeral=True)
+            return
+        df.at[idx, 'Zombie'] = True
+        global zom
+        global hum
+        zom += 1
+        hum -= 1
+        df.to_csv(f'{file_path}/player_data.csv', index=False, float_format='%g')
+
+    await updatePresence()
+    hvz_guild = ctx.author.guild
+    hvz_member = await hvz_guild.fetch_member(row['Discord_ID'])
+    await hvz_member.add_roles(hvz_guild.get_role(zombie_role_id))
+    await hvz_member.remove_roles(hvz_guild.get_role(human_role_id))
+    await hvz_member.add_roles(hvz_guild.get_role(oz_role_id))
+    await hvz_guild.get_channel(tags_channel).send(f'{row["Name"]} is now an OZ, {hum} humans left!')
+    post_data = {
+        "player_id": int(id)
+    }
+    if(use_website):
+        post_request = requests.post(f'{backend_path}{oz_path}', json=post_data)
+        print(post_data)
+        print(post_request.status_code)
+    await ctx.respond(f'Successfully tagged {hvz_member.name}', ephemeral=True)
 
 @bot.command(description="Wipe the website database (Please only do this if you are super sure)", guild_ids=[hvz_guild_id])
 async def wipewebsite(ctx, password:str):
@@ -478,39 +491,41 @@ async def wipewebsite(ctx, password:str):
 
 @bot.command(description="Cure a player", guild_ids=[hvz_guild_id])
 async def cure(ctx, id: int):
-    index = 0
-    with open(file=f'{file_path}/player_data.csv', mode="r") as f:
-        csv_reader = csv.reader(f)
-        for row in csv_reader:
-            if(row[0] == str(id)):
-                df = pd.read_csv(f'{file_path}/player_data.csv')
-                if(df.at[index-1, 'Zombie'] == False):
-                    await ctx.respond(f'{row[3]} is not a zombie!', ephemeral=True)
-                    return
-                df.at[index-1, 'Zombie'] = False
-                hvz_guild = ctx.author.guild
-                hvz_member = await hvz_guild.fetch_member(row[1])
-                global zom
-                global hum
-                zom -= 1
-                hum += 1
-                await updatePresence()
-                await hvz_member.remove_roles(hvz_guild.get_role(zombie_role_id))
-                await hvz_member.add_roles(hvz_guild.get_role(human_role_id))
-                await hvz_member.add_roles(hvz_guild.get_role(cured_role_id))
-                await hvz_guild.get_channel(tags_channel).send(f'{row[3]} was cured, {hum} humans left!')
-                df.to_csv(f'{file_path}/player_data.csv', index=False, float_format='%g')
-                post_data = {
-                    "player_id": int(id)
-                }
-                if(use_website):
-                    post_request = requests.post(f'{backend_path}{cure_path}', json=post_data)
-                    print(post_data)
-                    print(post_request.status_code)
-                await ctx.respond(f'Successfully cured {hvz_member.name}', ephemeral=True)
-                return
-            index += 1
-        await ctx.respond(f'{id} is not a valid ID!', ephemeral=True)
+    async with csv_lock:
+        df = pd.read_csv(f'{file_path}/player_data.csv')
+
+        target_match = df.index[df['HvZ_ID'] == id]
+        if not len(target_match):
+            await ctx.respond(f'{id} is not a valid ID!', ephemeral=True)
+            return
+        idx = target_match[0]
+        row = df.loc[idx]
+
+        if(df.at[idx, 'Zombie'] == False):
+            await ctx.respond(f'{row["Name"]} is not a zombie!', ephemeral=True)
+            return
+        df.at[idx, 'Zombie'] = False
+        global zom
+        global hum
+        zom -= 1
+        hum += 1
+        df.to_csv(f'{file_path}/player_data.csv', index=False, float_format='%g')
+
+    await updatePresence()
+    hvz_guild = ctx.author.guild
+    hvz_member = await hvz_guild.fetch_member(row['Discord_ID'])
+    await hvz_member.remove_roles(hvz_guild.get_role(zombie_role_id))
+    await hvz_member.add_roles(hvz_guild.get_role(human_role_id))
+    await hvz_member.add_roles(hvz_guild.get_role(cured_role_id))
+    await hvz_guild.get_channel(tags_channel).send(f'{row["Name"]} was cured, {hum} humans left!')
+    post_data = {
+        "player_id": int(id)
+    }
+    if(use_website):
+        post_request = requests.post(f'{backend_path}{cure_path}', json=post_data)
+        print(post_data)
+        print(post_request.status_code)
+    await ctx.respond(f'Successfully cured {hvz_member.name}', ephemeral=True)
 
 @bot.command(description="Purge a channel of text messages", guild_ids=[hvz_guild_id])
 async def purgechannel(ctx):
@@ -535,38 +550,37 @@ async def purgerole(ctx, role_id):
 
 @bot.command(description="Remove a player from the game", guild_ids=[hvz_guild_id])
 async def removeplayer(ctx, id: int):
-    index = 0
-    with open(file=f'{file_path}/player_data.csv', mode='r') as f:
-        csv_reader = csv.reader(f)
-        for row in csv_reader:
-            if(row[0] == 'HvZ_ID'): 
-                index += 1
-                continue
-            if(int(row[0]) == id): break
-            index += 1
-    
-    df = pd.read_csv(f'{file_path}/player_data.csv')
-    if(df.at[index-1, 'InPlay'] == False):
-        await ctx.respond(f'{df.at[index-1, "Name"]} is not in play!', ephemeral=True)
-        return
-    else:
-        df.at[index-1, 'InPlay'] = False
-        if(df.at[index-1, 'Zombie'] == True):
+    async with csv_lock:
+        df = pd.read_csv(f'{file_path}/player_data.csv')
+        target_match = df.index[df['HvZ_ID'] == id]
+        if not len(target_match):
+            await ctx.respond(f'{id} is not a valid ID!', ephemeral=True)
+            return
+        idx = target_match[0]
+
+        if(df.at[idx, 'InPlay'] == False):
+            await ctx.respond(f'{df.at[idx, "Name"]} is not in play!', ephemeral=True)
+            return
+
+        name = df.at[idx, "Name"]
+        df.at[idx, 'InPlay'] = False
+        if(df.at[idx, 'Zombie'] == True):
             global zom
             zom -= 1
         else:
             global hum
             hum -= 1
-        await updatePresence()
         df.to_csv(f'{file_path}/player_data.csv', index=False, float_format='%g')
-        post_data = {
-            "player_id": int(id)
-        }
-        if(use_website):
-            post_request = requests.post(f'{backend_path}{player_removal_path}', json=post_data)
-            print(post_data)
-            print(post_request.status_code)
-        await ctx.respond(f'{df.at[index-1, "Name"]} has been removed from play!', ephemeral=True)
+
+    await updatePresence()
+    post_data = {
+        "player_id": int(id)
+    }
+    if(use_website):
+        post_request = requests.post(f'{backend_path}{player_removal_path}', json=post_data)
+        print(post_data)
+        print(post_request.status_code)
+    await ctx.respond(f'{name} has been removed from play!', ephemeral=True)
 
 @bot.command(description="Generate the sheets of player IDs to hand out", guild_ids=[hvz_guild_id])
 async def generateplayeridsheets(ctx):
