@@ -69,6 +69,21 @@ csv_lock = asyncio.Lock() # serializes every player_data.csv read-modify-write s
 @bot.event
 async def on_ready():
 
+    if(not Path(f'{file_path}/mod_descriptions').exists()):
+        Path(f'{file_path}/mod_descriptions').mkdir()
+
+    if(not Path(f'{file_path}/sheets').exists()):
+        Path(f'{file_path}/sheets').mkdir()
+
+    if(not Path(f'{file_path}/player_ids').exists()):
+        Path(f'{file_path}/player_ids').mkdir()
+
+    if(not Path(f'{file_path}/player_pictures').exists()):
+        Path(f'{file_path}/player_pictures').mkdir()
+
+    if(not Path(f'{file_path}/created_badges').exists()):
+        Path(f'{file_path}/created_badges').mkdir()
+
     with open(file=f'{file_path}/player_data.csv', mode="r") as f:
         csv_reader = csv.reader(f)
         # goes through each row in the player data file
@@ -537,15 +552,17 @@ async def purgechannel(ctx):
 
 @bot.command(description="Purge all players with a given role", guild_ids=[hvz_guild_id])
 async def purgerole(ctx, role_id):
+    await ctx.response.defer(ephemeral=True)
     members_to_kick = []
     for pl in ctx.guild.members:
+        print(pl.roles)
         for role in pl.roles:
             if(role.id == role_id):
                 members_to_kick.append(pl)
                 break
     
     for member in members_to_kick:
-        await ctx.reply(f'{member.name} has been purged!')
+        await ctx.followup.send(f'{member.name} has been purged!', ephemeral=True)
         member.kick()
 
 @bot.command(description="Remove a player from the game", guild_ids=[hvz_guild_id])
@@ -596,6 +613,7 @@ async def generateplayeridsheets(ctx):
         if f.is_file() and f.path.endswith(".png"):
             discord_id = int(f.name.removesuffix("_id.png"))
             hvz_guild = bot.get_guild(hvz_guild_id)
+            print(hvz_guild.get_member(discord_id))
             if hvz_guild.get_member(discord_id).roles.count(hvz_guild.get_role(mod_role_id)):
                 continue
             if sheets == 0:
